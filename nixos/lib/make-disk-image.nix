@@ -200,6 +200,10 @@
 
   # Additional store paths to copy to the image's store.
   additionalPaths ? [ ],
+
+  # The logical sector size of the disk image in bytes. Useful for
+  # make images for UFS or EMMC storage that require 4096 byte sectors.
+  sectorSize ? "512",
 }:
 
 assert (
@@ -281,13 +285,13 @@ let
     {
       # switch-case
       legacy = ''
-        parted --script $diskImage -- \
+        parted --script $loopDev -- \
           mklabel msdos \
           mkpart primary ext4 1MiB 100% \
           print
       '';
       "legacy+boot" = ''
-        parted --script $diskImage -- \
+        parted --script $loopDev -- \
           mklabel msdos \
           mkpart primary fat32 1MiB $bootSizeMiB \
           set 1 boot on \
@@ -295,7 +299,7 @@ let
           print
       '';
       "legacy+gpt" = ''
-        parted --script $diskImage -- \
+        parted --script $loopDev -- \
           mklabel gpt \
           mkpart no-fs 1MiB 2MiB \
           set 1 bios_grub on \
@@ -308,11 +312,11 @@ let
           --partition-guid=1:1C06F03B-704E-4657-B9CD-681A087A2FDC \
           --partition-guid=2:970C694F-AFD0-4B99-B750-CDB7A329AB6F \
           --partition-guid=3:${rootGPUID} \
-          $diskImage
+          $loopDev
         ''}
       '';
       efi = ''
-        parted --script $diskImage -- \
+        parted --script $loopDev -- \
           mklabel gpt \
           mkpart ESP fat32 8MiB $bootSizeMiB \
           set 1 boot on \
@@ -325,11 +329,11 @@ let
           --disk-guid=97FD5997-D90B-4AA3-8D16-C1723AEA73C \
           --partition-guid=1:1C06F03B-704E-4657-B9CD-681A087A2FDC \
           --partition-guid=2:${rootGPUID} \
-          $diskImage
+          $loopDev
         ''}
       '';
       efixbootldr = ''
-        parted --script $diskImage -- \
+        parted --script $loopDev -- \
           mklabel gpt \
           mkpart ESP fat32 8MiB 100MiB \
           set 1 boot on \
@@ -346,11 +350,11 @@ let
           --partition-guid=1:1C06F03B-704E-4657-B9CD-681A087A2FDC  \
           --partition-guid=2:970C694F-AFD0-4B99-B750-CDB7A329AB6F  \
           --partition-guid=3:${rootGPUID} \
-          $diskImage
+          $loopDev
         ''}
       '';
       hybrid = ''
-        parted --script $diskImage -- \
+        parted --script $loopDev -- \
           mklabel gpt \
           mkpart ESP fat32 8MiB $bootSizeMiB \
           set 1 boot on \
@@ -366,7 +370,7 @@ let
           --partition-guid=1:1C06F03B-704E-4657-B9CD-681A087A2FDC \
           --partition-guid=2:970C694F-AFD0-4B99-B750-CDB7A329AB6F \
           --partition-guid=3:${rootGPUID} \
-          $diskImage
+          $loopDev
         ''}
       '';
       none = "";
@@ -401,6 +405,9 @@ let
       nixos-enter
       nix
       systemdMinimal
+      coreutils
+      sudo
+      kmod
     ]
     ++ lib.optional deterministic gptfdisk
     ++ stdenv.initialPath
@@ -430,11 +437,11 @@ let
 
     # Yes, mkfs.ext4 takes different units in different contexts. Fun.
     sectorsToKilobytes() {
-      echo $(( ( "$1" * 512 ) / 1024 ))
+      echo $(( ( "$1" * ${sectorSize} ) / 1024 ))
     }
 
     sectorsToBytes() {
-      echo $(( "$1" * 512  ))
+      echo $(( "$1" * ${sectorSize} ))
     }
 
     # Given lines of numbers, adds them together
@@ -539,7 +546,7 @@ let
             then
               ''
                 # Add the GPT at the end
-                gptSpace=$(( 512 * 34 * 1 ))
+                gptSpace=$(( ${sectorSize} * 34 * 1 ))
                 # Normally we'd need to account for alignment and things, if bootSize
                 # represented the actual size of the boot partition. But it instead
                 # represents the offset at which it ends.
@@ -549,7 +556,7 @@ let
             else if partitionTableType == "legacy+gpt" then
               ''
                 # Add the GPT at the end
-                gptSpace=$(( 512 * 34 * 1 ))
+                gptSpace=$(( ${sectorSize} * 34 * 1 ))
                 # And include the bios_grub partition; the ext4 partition starts at 2MiB exactly.
                 reservedSpace=$(( gptSpace + 2 * mebibyte ))
               ''
@@ -589,7 +596,7 @@ let
           diskSize=$(( requiredFilesystemSpace + additionalSpace ))
 
           # Round up to the nearest mebibyte.
-          # This ensures whole 512 bytes sector sizes in the disk image
+          # This ensures whole 512/4096 bytes sector sizes in the disk image
           # and helps towards aligning partitions optimally.
           diskSize=$(round_to_nearest $diskSize $mebibyte)
 
@@ -608,7 +615,15 @@ let
         ''
     }
 
+    lsmod
+    sudo mknod /dev/loop0 b 7 0
+    ls -al
+    ls -al /dev
+    loopDev=$( losetup --find --show --sector-size ${sectorSize} $diskImage )
+
     ${partitionDiskScript}
+
+    losetup -d $loopDev
 
     ${
       if partitionTableType != "none" then
@@ -657,7 +672,19 @@ let
     echo "file ${format}-image $out/${filename}" >> $out/nix-support/hydra-build-products
   '';
 
-  buildImage = pkgs.vmTools.runInLinuxVM (
+  buildImage = (pkgs.vmTools.override {
+    rootModules = [
+      "virtio_pci"
+      "virtio_mmio"
+      "virtio_blk"
+      "virtio_balloon"
+      "virtio_rng"
+      "ext4"
+      "virtiofs"
+      "crc32c_generic"
+      "loop"
+    ];
+  }).runInLinuxVM (
     pkgs.runCommand name
       {
         preVM = prepareImage + lib.optionalString touchEFIVars createEFIVars;
