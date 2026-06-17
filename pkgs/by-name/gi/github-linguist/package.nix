@@ -8,12 +8,12 @@
 
 let
   gemName = "github-linguist";
-  version = "9.5.0";
+  version = "9.6.0";
   src = fetchFromGitHub {
     owner = "github-linguist";
     repo = "linguist";
     tag = "v${version}";
-    hash = "sha256-kxPiHsWrd+iwvasXfHiwZYAJFMmzZGOsZtsor5Jf1fg=";
+    hash = "sha256-41dlhcpD5r7A7M22dMrD7L/Y8VbzQW/GO4xKFhNyhFY=";
   };
 
   deps = bundlerEnv {
