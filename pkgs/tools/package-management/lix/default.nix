@@ -8,6 +8,7 @@
   boehmgc,
   callPackage,
   fetchFromGitea,
+  fetchpatch2,
   fetchpatch,
   rustPlatform,
   editline,
@@ -38,6 +39,11 @@ let
     name = "lix-f2-increase-timeouts-and-max-worker-count.patch";
     url = "https://git.lix.systems/lix-project/lix/commit/c6d22874d6dffc9646279601ad546c1d78d9a409.patch";
     hash = "sha256-V6Q9XFsdla/OPwGPvAkb8mBisdfQbkaNKqpCfL3Tk4U=";
+  };
+  lixCpuidSeccompPatch = fetchpatch2 {
+    name = "lix-2.95-cpuid-seccomp.patch";
+    url = "https://gerrit.lix.systems/changes/lix~6114/revisions/1/patch?download&raw";
+    hash = "sha256-2J7INu0Ov9bZ/NxelYdlykWcOY1/8PzJXiVXMD1C9JQ=";
   };
 
   makeLixScope =
@@ -195,6 +201,7 @@ lib.makeExtensible (
       lix-args = (import ./2.95.nix { inherit fetchFromGitea rustPlatform nix-update-script; }) // {
         patches = [
           lixFunctional2TimeoutPatch
+          lixCpuidSeccompPatch
           ./darwin-libcxx-nodiscard.patch
         ];
       };
