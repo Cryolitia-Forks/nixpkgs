@@ -42,11 +42,20 @@ let
     excludes = [ "package.nix" ];
     hash = "sha256-uu/SIG8fgVVWhsGxmszTPHwe4SQtLgbxdShOMKbeg2w=";
   };
-
   lixFunctional2TimeoutPatch = fetchpatch {
     name = "lix-f2-increase-timeouts-and-max-worker-count.patch";
     url = "https://git.lix.systems/lix-project/lix/commit/c6d22874d6dffc9646279601ad546c1d78d9a409.patch";
     hash = "sha256-V6Q9XFsdla/OPwGPvAkb8mBisdfQbkaNKqpCfL3Tk4U=";
+  };
+  lixCpuidPatch = fetchpatch2 {
+    name = "lix-2.94-cpuid.patch";
+    url = "https://gerrit.lix.systems/changes/lix~6113/revisions/1/patch?download&raw";
+    hash = "sha256-YyKBNptp8wbOYoHlNqoxZSoFJrKFhm2H7LVvAX9Fnow=";
+  };
+  lixCpuidSeccompPatch = fetchpatch2 {
+    name = "lix-2.95-cpuid-seccomp.patch";
+    url = "https://gerrit.lix.systems/changes/lix~6114/revisions/1/patch?download&raw";
+    hash = "sha256-2J7INu0Ov9bZ/NxelYdlykWcOY1/8PzJXiVXMD1C9JQ=";
   };
   makeLixScope =
     {
@@ -209,6 +218,7 @@ lib.makeExtensible (
 
         patches = [
           lixMdbookPatch
+          lixCpuidPatch
         ];
       };
     };
@@ -235,6 +245,7 @@ lib.makeExtensible (
 
         patches = [
           lixFunctional2TimeoutPatch
+          lixCpuidSeccompPatch
         ];
       };
     };
@@ -258,6 +269,10 @@ lib.makeExtensible (
           inherit src;
           hash = "sha256-a5XtutX+NS4wOqxeqbscWZMs99teKick5+cQfbCRGxQ=";
         };
+
+        patches = [
+          lixCpuidSeccompPatch
+        ];
       };
     };
 
