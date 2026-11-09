@@ -112,6 +112,8 @@ in
   devShellTools = callPackage ../build-support/dev-shell-tools/tests { };
 
   stdenv-inputs = callPackage ./stdenv-inputs { };
+  steam-arm64 = callPackage ./steam-arm64 { };
+  steam-arm64-gtk2 = callPackage ./steam-arm64/gtk2-soname.nix { };
   stdenv = recurseIntoAttrs (callPackage ./stdenv { });
 
   hardeningFlags = recurseIntoAttrs (callPackage ./cc-wrapper/hardening.nix { });

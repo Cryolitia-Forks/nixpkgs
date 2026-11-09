@@ -1,6 +1,9 @@
 {
   lib,
+  stdenv,
   steam-unwrapped,
+  fex-steam,
+  proton-ge-bin,
   buildFHSEnv,
   writeShellScript,
   extraPkgs ? pkgs: [ ], # extra packages to add to targetPkgs
@@ -10,9 +13,14 @@
   extraBwrapArgs ? [ ], # extra arguments to pass to bubblewrap (real default is at usage site)
   extraArgs ? "", # arguments to always pass to steam
   extraEnv ? { }, # Environment variables to pass to Steam
+  compatPackages ? lib.optionals (stdenv.hostPlatform.isAarch64 && stdenv.hostPlatform.isLinux) [
+    proton-ge-bin
+    fex-steam
+  ],
   privateTmp ? true, # if the steam bubblewrap should isolate /tmp
 }:
 let
+  isArm64 = stdenv.hostPlatform.isAarch64 && stdenv.hostPlatform.isLinux;
   buildRuntimeEnv =
     {
       extraPkgs ? pkgs: [ ],
@@ -21,6 +29,7 @@ let
       extraPreBwrapCmds ? "",
       extraBwrapArgs ? [ ],
       extraEnv ? { },
+      compatPackages ? [ ],
       privateTmp ? true,
       ...
     }@args:
@@ -33,11 +42,15 @@ let
         "extraBwrapArgs"
         "extraArgs"
         "extraEnv"
+        "compatPackages"
       ])
       // {
         inherit privateTmp;
 
-        multiArch = true;
+        # ARM64 Steam and Proton use native host libraries. FEX supplies the
+        # x86 userspace for Linux games separately, rather than using ARM32
+        # multilib packages here.
+        multiArch = !isArm64;
         includeClosures = true;
 
         # https://gitlab.steamos.cloud/steamrt/steam-runtime-tools/-/blob/main/docs/distro-assumptions.md#command-line-tools
@@ -50,7 +63,7 @@ let
             file
             lsb-release # not documented, called from Big Picture
             pciutils # not documented, complains about lspci on startup
-            glibc_multi.bin
+            (if isArm64 then glibc.bin else glibc_multi.bin)
             usbutils # not documented, complains about lsusb on startup (needed for the 'Enter VR Mode' button to appear)
             xdg-utils # calls xdg-open occasionally
             xz
@@ -61,6 +74,21 @@ let
               mkdir -p $out
               ln -s ${libx11}/share $out/share
             '')
+          ]
+          ++ lib.optionals isArm64 [
+            curl
+            findutils
+            gnugrep
+            gnused
+            gnutar
+            gzip
+            lsof # steamwebhelper authenticates local IPC clients using lsof
+            procps
+            python3
+            unzip
+            util-linux # steamwebhelper.sh invokes taskset
+            xdg-user-dirs
+            zstd
           ]
           ++ extraPkgs pkgs;
 
@@ -84,6 +112,44 @@ let
             # not documented, used for network status things in Big Picture
             # FIXME: figure out how to only build libnm?
             libcap # not documented, required by srt-bwrap
+          ]
+          ++ lib.optionals isArm64 [
+            SDL2
+            alsa-lib
+            at-spi2-core
+            cairo
+            cups
+            dbus
+            expat
+            fontconfig
+            freetype
+            gdk-pixbuf
+            glib
+            (pkgs.callPackage ./gtk2-for-steam.nix { })
+            gtk3
+            ibus
+            libice
+            libpulseaudio
+            libsm
+            libx11
+            libxcb
+            libxcomposite
+            libxcursor
+            libxdamage
+            libxext
+            libxfixes
+            libxi
+            libxinerama
+            libxkbcommon
+            libxrandr
+            libxrender
+            libxtst
+            nspr
+            nss
+            openal
+            pango
+            pipewire
+            wayland
           ]
           ++ extraLibraries pkgs;
 
@@ -115,13 +181,31 @@ let
           ln -sf /usr/share/zoneinfo/$tz /etc/localtime
 
           set -a
-          ${lib.toShellVars extraEnv}
+          ${lib.toShellVars (removeAttrs extraEnv [ "STEAM_EXTRA_COMPAT_TOOLS_PATHS" ])}
           set +a
 
           ${extraProfile}
         '';
 
-        inherit extraPreBwrapCmds;
+        # The FHS builder traverses the profile's closure. Register compatibility
+        # tools in the outer launcher so their foreign userspace and /etc files
+        # cannot be merged into the native client environment. The launcher
+        # still retains the tools as dependencies and passes this variable in.
+        extraPreBwrapCmds = ''
+          ${extraPreBwrapCmds}
+          ${lib.optionalString (extraEnv ? STEAM_EXTRA_COMPAT_TOOLS_PATHS) ''
+            set -a
+            ${lib.toShellVars (lib.getAttrs [ "STEAM_EXTRA_COMPAT_TOOLS_PATHS" ] extraEnv)}
+            set +a
+          ''}
+          ${lib.optionalString (!(extraEnv ? STEAM_EXTRA_COMPAT_TOOLS_PATHS) && compatPackages != [ ]) ''
+            if [[ ! -v STEAM_EXTRA_COMPAT_TOOLS_PATHS ]]; then
+              export STEAM_EXTRA_COMPAT_TOOLS_PATHS=${
+                lib.escapeShellArg (lib.makeSearchPathOutput "steamcompattool" "" compatPackages)
+              }
+            fi
+          ''}
+        '';
 
         # Steam expects /sbin/ldconfig to exist, and since SinceRT3
         # symlinking it results in a symlink loop in nested containers.
@@ -147,6 +231,7 @@ buildRuntimeEnv {
   inherit (steam-unwrapped) version meta;
 
   extraPkgs = pkgs: [ steam-unwrapped ] ++ extraPkgs pkgs;
+  inherit compatPackages;
   inherit
     extraLibraries
     extraProfile
@@ -157,6 +242,12 @@ buildRuntimeEnv {
     ;
 
   runScript = writeShellScript "steam-wrapped" ''
+    ${lib.optionalString isArm64 ''
+      if [[ $(getconf PAGESIZE) != 4096 ]]; then
+        echo "Steam's ARM64 client requires a 4 KiB page kernel; run this launcher inside a 4 KiB VM such as muvm." >&2
+        exit 1
+      fi
+    ''}
     exec steam ${extraArgs} "$@"
   '';
 
@@ -202,6 +293,7 @@ buildRuntimeEnv {
     in
     {
       inherit buildRuntimeEnv;
+      inherit compatPackages;
 
       run = makeSteamRun [ steam-unwrapped ];
       run-free = makeSteamRun [ ];
