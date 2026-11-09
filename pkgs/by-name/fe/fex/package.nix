@@ -28,7 +28,8 @@
   libx11,
   xorgproto,
   libxcb,
-  withQt ? true,
+  withSteamSupport ? false,
+  withQt ? !withSteamSupport,
   qt6,
 }:
 
@@ -98,7 +99,7 @@ let
   '';
 in
 llvmPackages.stdenv.mkDerivation (finalAttrs: {
-  pname = "fex";
+  pname = "fex" + lib.optionalString withSteamSupport "-steam";
   version = "2608";
 
   src = fetchFromGitHub {
@@ -153,22 +154,45 @@ llvmPackages.stdenv.mkDerivation (finalAttrs: {
       --replace-fail ".Dd {0}" ".Dd" \
       --replace-fail "output_man.write(header.format(" "output_man.write(header) #"
 
-    # Patch any references to library wrapper paths
-    substituteInPlace FEXCore/Source/Interface/Config/Config.json.in \
-      --replace-fail "ThunkGuestLibs" "UnusedThunkGuestLibs" \
-      --replace-fail "ThunkHostLibs" "UnusedThunkHostLibs"
-    substituteInPlace FEXCore/Source/Interface/Config/Config.cpp \
-      --replace-fail "FEXCore::Config::CONFIG_THUNKGUESTLIBS" "FEXCore::Config::CONFIG_UNUSEDTHUNKGUESTLIBS" \
-      --replace-fail "FEXCore::Config::CONFIG_THUNKHOSTLIBS" "FEXCore::Config::CONFIG_UNUSEDTHUNKHOSTLIBS"
-    substituteInPlace Source/Tools/LinuxEmulation/VDSO_Emulation.cpp \
-      --replace-fail "FEX_CONFIG_OPT(ThunkGuestLibs, THUNKGUESTLIBS);" "auto ThunkGuestLibs = []() { return \"$out/share/fex-emu/GuestThunks/\"; };"
-    substituteInPlace Source/Tools/LinuxEmulation/LinuxSyscalls/FileManagement.h \
-      --replace-fail "FEX_CONFIG_OPT(ThunkGuestLibs, THUNKGUESTLIBS);" "fextl::string ThunkGuestLibs() { return \"$out/share/fex-emu/GuestThunks/\"; }"
-    substituteInPlace Source/Tools/LinuxEmulation/Thunks.cpp \
-      --replace-fail "FEX_CONFIG_OPT(ThunkHostLibsPath, THUNKHOSTLIBS);" "fextl::string ThunkHostLibsPath() { return \"$out/lib/fex-emu/HostThunks/\"; }"
-    substituteInPlace Source/Tools/FEXConfig/main.qml \
-      --replace-fail "config: \"Thunk" "config: \"UnusedThunk" \
-      --replace-fail "title: qsTr(\"Library forwarding:\")" "visible: false; title: qsTr(\"Library forwarding:\")"
+    ${lib.optionalString withSteamSupport ''
+          # Steam's relocatable depot lives below the Nix output, rather than the
+          # filesystem root. Keep the upstream portable configuration and thunks:
+          # pressure-vessel will use them inside a different mount namespace.
+      substituteInPlace Source/Steam/CMakeLists.txt \
+            --replace-fail "DESTINATION /" "DESTINATION ."
+          # A direct x86 game needs different guest graphics search paths from a
+          # pressure-vessel container. Let the Steam wrapper supply that template
+          # without replacing FEXCompatTool's per-game Steam configuration.
+      patch -p1 < ${./steam-config-template-override.patch}
+      # Backport FEX d96e48e246fae8ec4953b253297ab823fe161176. Vulkan loaders
+      # query the getters themselves; returning a host pointer here crashes
+      # guest callers (including current vkcube and Mesa Zink).
+      patch -p1 < ${./fix-vulkan-proc-address-self-lookup.patch}
+      # Choose guest graphics defaults from the ELF actually loaded by FEX,
+      # including games reached through launch scripts and mixed-bitness exec.
+      cp ${./steam-guest-graphics.h} Source/Tools/FEXInterpreter/steam-guest-graphics.h
+      patch -p1 < ${./steam-guest-graphics.patch}
+    ''}
+
+    ${lib.optionalString (!withSteamSupport) ''
+      # Patch any references to library wrapper paths
+      substituteInPlace FEXCore/Source/Interface/Config/Config.json.in \
+        --replace-fail "ThunkGuestLibs" "UnusedThunkGuestLibs" \
+        --replace-fail "ThunkHostLibs" "UnusedThunkHostLibs"
+      substituteInPlace FEXCore/Source/Interface/Config/Config.cpp \
+        --replace-fail "FEXCore::Config::CONFIG_THUNKGUESTLIBS" "FEXCore::Config::CONFIG_UNUSEDTHUNKGUESTLIBS" \
+        --replace-fail "FEXCore::Config::CONFIG_THUNKHOSTLIBS" "FEXCore::Config::CONFIG_UNUSEDTHUNKHOSTLIBS"
+      substituteInPlace Source/Tools/LinuxEmulation/VDSO_Emulation.cpp \
+        --replace-fail "FEX_CONFIG_OPT(ThunkGuestLibs, THUNKGUESTLIBS);" "auto ThunkGuestLibs = []() { return \"$out/share/fex-emu/GuestThunks/\"; };"
+      substituteInPlace Source/Tools/LinuxEmulation/LinuxSyscalls/FileManagement.h \
+        --replace-fail "FEX_CONFIG_OPT(ThunkGuestLibs, THUNKGUESTLIBS);" "fextl::string ThunkGuestLibs() { return \"$out/share/fex-emu/GuestThunks/\"; }"
+      substituteInPlace Source/Tools/LinuxEmulation/Thunks.cpp \
+        --replace-fail "FEX_CONFIG_OPT(ThunkHostLibsPath, THUNKHOSTLIBS);" "fextl::string ThunkHostLibsPath() { return \"$out/lib/fex-emu/HostThunks/\"; }"
+      substituteInPlace Source/Tools/FEXConfig/main.qml \
+        --replace-fail "config: \"Thunk" "config: \"UnusedThunk" \
+        --replace-fail "title: qsTr(\"Library forwarding:\")" "visible: false; title: qsTr(\"Library forwarding:\")"
+
+    ''}
 
     # Temporarily disable failing tests. TODO: investigate the root cause of these failures
     rm \
@@ -214,6 +238,9 @@ llvmPackages.stdenv.mkDerivation (finalAttrs: {
     (lib.cmakeFeature "OVERRIDE_VERSION" finalAttrs.version)
     (lib.cmakeBool "BUILD_THUNKS" true)
     (lib.cmakeBool "BUILD_FEXCONFIG" withQt)
+  ]
+  ++ lib.optional withSteamSupport (lib.cmakeBool "BUILD_STEAM_SUPPORT" true)
+  ++ [
     (lib.cmakeFeature "X86_32_TOOLCHAIN_FILE" "${toolchain32}")
     (lib.cmakeFeature "X86_64_TOOLCHAIN_FILE" "${toolchain}")
     (lib.cmakeFeature "X86_DEV_ROOTFS" "${devRootFS}")

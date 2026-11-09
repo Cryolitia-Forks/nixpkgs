@@ -1,0 +1,17 @@
+Allow a per-launch Steam configuration template so guest graphics paths can
+differ between a direct RootFS launch and a pressure-vessel container.
+
+diff --git a/Source/Steam/CompatTool.cpp b/Source/Steam/CompatTool.cpp
+--- a/Source/Steam/CompatTool.cpp
++++ b/Source/Steam/CompatTool.cpp
+@@ -17,6 +17,9 @@
+ 
+ fextl::string GenerateSteamConfigTemplate(const FEX::Config::PortableInformation& PortableInfo) {
+-  const auto ConfigTemplatePath = PortableInfo.InterpreterPath + "ConfigTemplate.json";
++  auto ConfigTemplatePath = PortableInfo.InterpreterPath + "ConfigTemplate.json";
++  if (const char* TemplateOverride = getenv("FEX_STEAM_CONFIG_TEMPLATE")) {
++    ConfigTemplatePath = TemplateOverride;
++  }
+   if (!FHU::Filesystem::Exists(ConfigTemplatePath)) {
+     return {};
+   }

@@ -1,0 +1,18 @@
+--- a/Source/Tools/FEXInterpreter/ELFCodeLoader.h
++++ b/Source/Tools/FEXInterpreter/ELFCodeLoader.h
+@@ -8,6 +8,7 @@
+ #include "FEXCore/Utils/Allocator.h"
+ #include "LinuxSyscalls/Syscalls.h"
+ #include "VDSO_Emulation.h"
++#include "steam-guest-graphics.h"
+ #include "Linux/Utils/ELFParser.h"
+ 
+ #include <cstring>
+@@ -337,6 +338,7 @@
+     if (AdditionalEnvp) {
+       const auto& EnvpList = AdditionalEnvp->All();
+       EnvironmentVariables.insert(EnvironmentVariables.end(), EnvpList.begin(), EnvpList.end());
++      FEX::Nix::ConfigureGuestGraphics(EnvironmentVariables, Is64BitMode(), EnvpList);
+     }
+ 
+     if (InjectLibSegFault()) {

@@ -8,6 +8,8 @@
 let
   cfg = config.programs.steam;
   gamescopeCfg = config.programs.gamescope;
+  isArm64 = pkgs.stdenv.hostPlatform.isAarch64;
+  hasX86Multilib = pkgs.stdenv.hostPlatform.isx86_64;
 
   extraCompatPaths = lib.makeSearchPathOutput "steamcompattool" "" cfg.extraCompatPackages;
 
@@ -56,29 +58,35 @@ in
       '';
       apply =
         steam:
-        steam.override (prev: {
-          extraEnv =
-            (lib.optionalAttrs (cfg.extraCompatPackages != [ ]) {
-              STEAM_EXTRA_COMPAT_TOOLS_PATHS = extraCompatPaths;
-            })
-            // (lib.optionalAttrs cfg.extest.enable {
-              LD_PRELOAD = "${pkgs.pkgsi686Linux.extest}/lib/libextest.so";
-            })
-            // (prev.extraEnv or { });
-          extraLibraries =
-            pkgs:
-            let
-              prevLibs = if prev ? extraLibraries then prev.extraLibraries pkgs else [ ];
-              additionalLibs =
-                with config.hardware.graphics;
-                if pkgs.stdenv.hostPlatform.is64bit then
-                  [ package ] ++ extraPackages
-                else
-                  [ package32 ] ++ extraPackages32;
-            in
-            prevLibs ++ additionalLibs;
-          extraPkgs = p: (cfg.extraPackages ++ lib.optionals (prev ? extraPkgs) (prev.extraPkgs p));
-        });
+        steam.override (
+          prev:
+          {
+            extraEnv =
+              (lib.optionalAttrs (isArm64 || cfg.extraCompatPackages != [ ]) {
+                STEAM_EXTRA_COMPAT_TOOLS_PATHS = extraCompatPaths;
+              })
+              // (lib.optionalAttrs cfg.extest.enable {
+                LD_PRELOAD = "${if isArm64 then pkgs.extest else pkgs.pkgsi686Linux.extest}/lib/libextest.so";
+              })
+              // (prev.extraEnv or { });
+            extraLibraries =
+              pkgs:
+              let
+                prevLibs = if prev ? extraLibraries then prev.extraLibraries pkgs else [ ];
+                additionalLibs =
+                  with config.hardware.graphics;
+                  if pkgs.stdenv.hostPlatform.is64bit then
+                    [ package ] ++ extraPackages
+                  else
+                    [ package32 ] ++ extraPackages32;
+              in
+              prevLibs ++ additionalLibs;
+            extraPkgs = p: (cfg.extraPackages ++ lib.optionals (prev ? extraPkgs) (prev.extraPkgs p));
+          }
+          // lib.optionalAttrs isArm64 {
+            compatPackages = cfg.extraCompatPackages;
+          }
+        );
       description = ''
         The Steam package to use. Additional libraries are added from the system
         configuration to ensure graphics work properly.
@@ -103,7 +111,16 @@ in
 
     extraCompatPackages = lib.mkOption {
       type = lib.types.listOf lib.types.package;
-      default = [ ];
+      default = lib.optionals isArm64 [
+        pkgs.proton-ge-bin
+        pkgs.fex-steam
+      ];
+      defaultText = lib.literalExpression ''
+        lib.optionals pkgs.stdenv.hostPlatform.isAarch64 [
+          pkgs.proton-ge-bin
+          pkgs.fex-steam
+        ]
+      '';
       example = lib.literalExpression ''
         with pkgs; [
           proton-ge-bin
@@ -206,7 +223,7 @@ in
     hardware.graphics = {
       # this fixes the "glXChooseVisual failed" bug, context: https://github.com/NixOS/nixpkgs/issues/47932
       enable = true;
-      enable32Bit = true;
+      enable32Bit = lib.mkIf hasX86Multilib true;
     };
 
     programs.steam.extraPackages = cfg.fontPackages;
@@ -217,8 +234,8 @@ in
     ];
 
     # enable 32bit pulseaudio/pipewire support if needed
-    services.pulseaudio.support32Bit = config.services.pulseaudio.enable;
-    services.pipewire.alsa.support32Bit = config.services.pipewire.alsa.enable;
+    services.pulseaudio.support32Bit = lib.mkIf hasX86Multilib config.services.pulseaudio.enable;
+    services.pipewire.alsa.support32Bit = lib.mkIf hasX86Multilib config.services.pipewire.alsa.enable;
 
     hardware.steam-hardware.enable = true;
 

@@ -3023,6 +3023,18 @@ with pkgs;
 
   elmPackages = recurseIntoAttrs (callPackage ../development/compilers/elm { });
 
+  # FEX needs a foreign userspace even when evaluated on an ARM64 machine.
+  # A native x86 package set reuses the binary cache instead of cross-building
+  # Mesa and the rest of the guest graphics stack.
+  fex-rootfs = callPackage ../by-name/fe/fex/rootfs.nix {
+    x86Packages = import ../.. {
+      localSystem = {
+        system = "x86_64-linux";
+      };
+      inherit config overlays;
+    };
+  };
+
   fasm = pkgsi686Linux.callPackage ../development/compilers/fasm {
     inherit (stdenv.hostPlatform) isx86_64;
   };
